@@ -1,14 +1,13 @@
 ---
 author:
 - |
-    Yuanxu Wu\
-    yw2983
+    Yuanxu Wu
 title: |
-    Optimization of Basic Raft Consensus Algorithm\
+    Optimization of Basic Raft Consensus Algorithm
     Project Proposal
 ---
 
-Motivation {#motivation .unnumbered}
+Motivation 
 ==========
 
 Consensus is a fundamental problem in any fault-tolerant distributed
@@ -17,7 +16,7 @@ software systems. One very important Consensus algorithm is Raft. In the
 basic raft algorithm, there are actually a lot of aspects which can be
 improved to let raft to be more efficient.
 
-Goal and Objectives {#goal-and-objectives .unnumbered}
+Goal and Objectives 
 ===================
 
 This paper’s goal is to understand and analyze ideas of optimizing the
@@ -25,7 +24,7 @@ efficiency of Raft Algorithm, which include using batching, pipelining,
 appending logs in parallelism and asynchronous apply in order to get
 higher throughput, lower latency, and higher performing speed.
 
-Approach {#approach .unnumbered}
+Approach 
 ========
 
 First of all the basic Raft consensus algorithm is implemented based on
@@ -58,7 +57,7 @@ throughput. The ideal improvement of implementing pipeline, parallelly
 executing and asynchronous applying to the state machine is to get lower
 latency.
 
-Validation {#validation .unnumbered}
+Validation 
 ==========
 
 After implementing the optimized Raft, I’m going to test the runtime
