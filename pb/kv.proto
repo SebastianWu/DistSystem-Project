@@ -1,0 +1,123 @@
+syntax = "proto3";
+
+package pb;
+
+// Represents a single key, used for gets.
+message Key {
+    string key = 1;
+}
+
+// Represents a single value, can be used for put etc.
+message Value {
+    string value = 1;
+}
+
+// Represent a key-value pair that is used to return results.
+message KeyValue {
+    string key = 1;
+    string value = 2;
+}
+
+// Represent a void message indicating success
+message Success {
+}
+
+// Represents an error.
+message Error {
+    string msg = 1;
+}
+
+// Represents an argument for CAS
+message CASArg {
+    KeyValue kv = 1;
+    Value value = 2;
+}
+
+// Represents an empty message
+message Empty {}
+
+// Represents a case where we need the client to connect
+// to another server.
+message Redirect {
+    string server = 1;
+}
+
+// Represents an operation result.
+message Result {
+    oneof result {
+        Redirect redirect = 1;
+        KeyValue kv = 2;
+        Success s = 3;
+    }
+}
+
+// KvStore service
+service KvStore {
+    // Get the value associated with a key.
+    rpc Get (Key) returns (Result) {}
+    rpc Set (KeyValue) returns (Result) {}
+    rpc Clear(Empty) returns (Result) {}
+    rpc CAS(CASArg) returns (Result) {}
+}
+
+// Internal representations for operations.
+enum Op {
+    GET = 0;
+    SET = 1;
+    CLEAR = 2;
+    CAS = 3;
+}
+
+// A type for arguments across all operations
+message Command {
+    Op operation = 1;
+    oneof arg {
+        Key get = 2;
+        KeyValue set = 3;
+        Empty clear = 4;
+        CASArg cas = 5;
+    }
+}
+
+// A log entry
+message Entry {
+    int64 term = 1;
+    int64 index = 2;
+    Command cmd = 3;
+}
+
+// Input to AppendEntries (as defined in Figure 2)
+message AppendEntriesArgs {
+    int64 term = 1;
+    string leaderID = 2;
+    int64 prevLogIndex = 3;
+    int64 prevLogTerm = 4;
+    int64 leaderCommit = 5;
+    repeated Entry entries = 6;
+}
+
+// Output from AppendEntries
+message AppendEntriesRet {
+    int64 term = 1;
+    bool success = 2;
+}
+
+// Input to RequestVote
+message RequestVoteArgs {
+    int64 term = 1;
+    string candidateID = 2;
+    int64 lastLogIndex = 3;
+    int64 lasLogTerm = 4;
+}
+
+// Output from RequestVote
+message RequestVoteRet {
+    int64 term = 1;
+    bool voteGranted = 2;
+}
+
+// Raft service
+service Raft {
+    rpc AppendEntries(AppendEntriesArgs) returns (AppendEntriesRet) {}
+    rpc RequestVote(RequestVoteArgs) returns (RequestVoteRet) {}
+}
