@@ -10,7 +10,7 @@ import (
 	context "golang.org/x/net/context"
 	"google.golang.org/grpc"
 
-	"github.com/nyu-distributed-systems-fa18/lab-2-raft-SebastianWu/pb"
+	"github.com/DistSystem-Project/RAFT/pb"
 )
 
 // Messages that can be passed from the Raft RPC server to the main loop for AppendEntries
@@ -181,7 +181,7 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 
 	// Run forever handling inputs from various channels
 	for {
-		time.Sleep(10 * time.Millisecond)
+		//time.Sleep(10 * time.Millisecond)
 		//log.Println(LOG)
 		//All Servers: If commitIndex > lastApplied: increment lastApplied, apply log[lastApplied] to state machine
 
@@ -261,7 +261,7 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 			if role != LEADER { // send pb.Redirect{currLeader} back to client
 				op.response <- pb.Result{Result: &pb.Result_Redirect{Redirect: &pb.Redirect{Server: currLeader}}}
 			} else { // if role is LEADER
-				//log.Printf("received operation %v", op.command)
+				log.Printf("received operation %v", op.command)
 				// append entry to local log
 				lastLogIndex := LOG[len(LOG)-1].Index
 
@@ -293,7 +293,7 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 				ae.response <- pb.AppendEntriesRet{Term: currentTerm, Success: false}
 			} else if int64(len(LOG)) <= ae.arg.PrevLogIndex || LOG[ae.arg.PrevLogIndex].Term != ae.arg.PrevLogTerm {
 				// Reply false if log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm
-				log.Printf("LOG doesn't contain an entry at prevLogIndex's term match prevLogTerm")
+				//log.Printf("LOG doesn't contain an entry at prevLogIndex's term match prevLogTerm")
 				ae.response <- pb.AppendEntriesRet{Term: currentTerm, Success: false}
 			} else {
 				if ae.arg.Entries != nil {
@@ -341,13 +341,13 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 
 			if vr.arg.Term < currentTerm {
 				// Reply false if term < currentTerm
-				log.Printf("Candidate %v 's term: %v is smaller than current term: %v", vr.arg.CandidateID, vr.arg.Term, currentTerm)
+				//log.Printf("Candidate %v 's term: %v is smaller than current term: %v", vr.arg.CandidateID, vr.arg.Term, currentTerm)
 				vr.response <- pb.RequestVoteRet{Term: currentTerm, VoteGranted: false}
 			} else if (votedFor == "" || votedFor == vr.arg.CandidateID) && vr.arg.LastLogIndex >= lastLogIndex && vr.arg.LasLogTerm >= lastLogTerm {
 				// If votedFor is null or candidateId, and candidate's log is at least up-to-date as receiver's log, grant vote
 				votedFor = vr.arg.CandidateID
 				vr.response <- pb.RequestVoteRet{Term: currentTerm, VoteGranted: true}
-				//restartTimer(timer, r)
+				restartTimer(timer, r)
 			} else {
 				vr.response <- pb.RequestVoteRet{Term: currentTerm, VoteGranted: false}
 			}
@@ -355,10 +355,10 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 			// We received a response to a previous vote request.
 			if vr.err != nil {
 				// Do not do Fatalf here since the peer might be gone but we should survive.
-				log.Printf("Error calling RPC %v", vr.err)
+				//log.Printf("Error calling RPC %v", vr.err)
 			} else {
 				log.Printf("Got response to vote request from %v", vr.peer)
-				log.Printf("Peers %s granted %v term %v", vr.peer, vr.ret.VoteGranted, vr.ret.Term)
+				//log.Printf("Peers %s granted %v term %v", vr.peer, vr.ret.VoteGranted, vr.ret.Term)
 				// If RPC request or response contains term T > currentTerm: set currentTerm = T, convert to follower
 				if vr.ret.Term > currentTerm {
 					currentTerm = vr.ret.Term

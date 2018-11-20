@@ -11,7 +11,7 @@ import (
 
 	"google.golang.org/grpc"
 
-	"github.com/nyu-distributed-systems-fa18/lab-2-raft-SebastianWu/pb"
+	"github.com/DistSystem-Project/RAFT/pb"
 )
 
 func main() {
