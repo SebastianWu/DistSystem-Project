@@ -76,17 +76,18 @@ func main() {
 	// Create a KvStore client
 	kvc = pb.NewKvStoreClient(conn)
 	log.Printf("start to test 1000 requests!\n")
-	for i:=0; i<200; i++{
+	for i := 0; i < 200; i++ {
 		test()
-		fmt.Printf("\033[15DOn %d/1000", i*5)
+		fmt.Printf("\033[15DOn %d/1000", (i+1)*5)
 	}
+	fmt.Println()
 	log.Printf("Finished test")
 }
 func test() {
 	// Clear KVC
 	res, err := kvc.Clear(context.Background(), &pb.Empty{})
 	arg := res.GetRedirect()
-	if arg != nil{
+	if arg != nil {
 		log.Printf("Redirecting")
 	}
 	for arg != nil {
@@ -110,7 +111,7 @@ func test() {
 	//	log.Fatalf("Put error")
 	//}
 	arg = res.GetRedirect()
-	if arg != nil{
+	if arg != nil {
 		log.Printf("Redirecting")
 	}
 
@@ -141,10 +142,9 @@ func test() {
 	//}
 	arg = res.GetRedirect()
 
-	if arg != nil{
+	if arg != nil {
 		log.Printf("Redirecting")
 	}
-
 
 	for arg != nil {
 		peerN := strings.Split(arg.Server, ":")[0]
@@ -174,10 +174,9 @@ func test() {
 	//}
 	arg = res.GetRedirect()
 
-	if arg != nil{
+	if arg != nil {
 		log.Printf("Redirecting")
 	}
-
 
 	for arg != nil {
 		peerN := strings.Split(arg.Server, ":")[0]
@@ -206,10 +205,9 @@ func test() {
 	//}
 	arg = res.GetRedirect()
 
-	if arg != nil{
+	if arg != nil {
 		log.Printf("Redirecting")
 	}
-
 
 	for arg != nil {
 		peerN := strings.Split(arg.Server, ":")[0]
@@ -230,7 +228,6 @@ func test() {
 		log.Fatalf("Get returned the wrong response")
 	}
 
-	
 	// CAS should fail for uninitialized variables
 	casReq = &pb.CASArg{Kv: &pb.KeyValue{Key: "hellooo", Value: "1"}, Value: &pb.Value{Value: "2"}}
 	res, err = kvc.CAS(context.Background(), casReq)
@@ -238,11 +235,10 @@ func test() {
 	//	log.Fatalf("Request error %v", err)
 	//}
 	arg = res.GetRedirect()
-	
-	if arg != nil{
+
+	if arg != nil {
 		log.Printf("Redirecting")
 	}
-
 
 	for arg != nil {
 		peerN := strings.Split(arg.Server, ":")[0]
@@ -262,5 +258,5 @@ func test() {
 	if res.GetKv().Key != "hellooo" || res.GetKv().Value == "2" {
 		log.Fatalf("Get returned the wrong response")
 	}
-	
+
 }
