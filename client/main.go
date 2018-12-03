@@ -23,6 +23,8 @@ var endpoint string
 var serverMap map[string]string
 var kvc pb.KvStoreClient
 var conn *grpc.ClientConn
+var CmdMap map[int]*pb.Command
+var CorrectResMap map[int]pb.KeyValue
 
 func usage() {
 	fmt.Printf("Usage %s <endpoint>\n", os.Args[0])
@@ -73,19 +75,76 @@ func main() {
 		log.Fatalf("Failed to dial GRPC server %v", err)
 	}
 
+	buildCommandMap()
+	buildCorrectResMap()
+
 	// Create a KvStore client
 	kvc = pb.NewKvStoreClient(conn)
-	log.Printf("start to test 1000 requests!\n")
-	for i := 0; i < 200; i++ {
-		test()
+	for i:=0; i<200; i++{
+		BatchTest()
 		fmt.Printf("\033[15DOn %d/1000", (i+1)*5)
 	}
-	fmt.Println()
-	log.Printf("Finished test")
+	log.Printf("\nFinished test")
+}
+func buildCommandMap() {
+	CmdMap = make(map[int]*pb.Command)
+	clear_c := pb.Command{Operation: pb.Op_CLEAR, Arg: &pb.Command_Clear{Clear: &pb.Empty{}}}
+	set_c := pb.Command{Operation: pb.Op_SET, Arg: &pb.Command_Set{Set: &pb.KeyValue{Key: "hello", Value: "1"}}}
+	get_c := pb.Command{Operation: pb.Op_GET, Arg: &pb.Command_Get{Get: &pb.Key{Key: "hello"}}}
+	cas_c1 := pb.Command{Operation: pb.Op_CAS, Arg: &pb.Command_Cas{Cas: &pb.CASArg{Kv: &pb.KeyValue{Key: "hello", Value: "1"}, Value: &pb.Value{Value: "2"}}}}
+	cas_c2 := pb.Command{Operation: pb.Op_CAS, Arg: &pb.Command_Cas{Cas: &pb.CASArg{Kv: &pb.KeyValue{Key: "hello", Value: "1"}, Value: &pb.Value{Value: "3"}}}}
+	cas_c3 := pb.Command{Operation: pb.Op_CAS, Arg: &pb.Command_Cas{Cas: &pb.CASArg{Kv: &pb.KeyValue{Key: "hellooo", Value: "1"}, Value: &pb.Value{Value: "2"}}}}
+	CmdMap[0] = &clear_c
+	CmdMap[1] = &set_c
+	CmdMap[2] = &get_c
+	CmdMap[3] = &cas_c1
+	CmdMap[4] = &cas_c2
+	CmdMap[5] = &cas_c3
+}
+func buildCorrectResMap() {
+	CorrectResMap = make(map[int]pb.KeyValue)
+	CorrectResMap[0] = pb.KeyValue{}
+	CorrectResMap[1] = pb.KeyValue{Key: "hello", Value: "1"}
+	CorrectResMap[2] = pb.KeyValue{Key: "hello", Value: "1"}
+	CorrectResMap[3] = pb.KeyValue{Key: "hello", Value: "2"}
+	CorrectResMap[4] = pb.KeyValue{Key: "hello", Value: "2"}
+	CorrectResMap[5] = pb.KeyValue{Key: "hellooo", Value: ""}
+}
+func BatchTest() {
+	Cmd_Batch := make([]*pb.Command,0)
+	for i:=0; i<6; i++{
+		Cmd_Batch = append(Cmd_Batch, CmdMap[i])
+	}
+	r := pb.CommandBatch{CmdB: Cmd_Batch}
+	res, err := kvc.Batching(context.Background(), &r)
+	arg := res.ResB[0].GetRedirect()
+	if arg != nil{
+		log.Printf("Redirecting!")
+	}
+	for arg != nil {
+		peerN := strings.Split(arg.Server, ":")[0]
+		endpoint = serverMap[peerN]
+		conn.Close()
+		conn, err = grpc.Dial(endpoint, grpc.WithInsecure())
+		if err != nil {
+			log.Fatalf("Failed to dial GRPC server %v", err)
+		}
+		//log.Printf("Connected")
+		kvc = pb.NewKvStoreClient(conn)
+		res, err = kvc.Batching(context.Background(), &r)
+		arg = res.ResB[0].GetRedirect()
+	}
+	for i:=1; i<6; i++{
+		//log.Printf("Key: %v, Value %v\n", res.ResB[i].GetKv().Key, res.ResB[i].GetKv().Value)
+		if res.ResB[i].GetKv().Key != CorrectResMap[i].Key || res.ResB[i].GetKv().Value != CorrectResMap[i].Value{
+			log.Printf("Wrong Res!\n")
+		}
+	}
 }
 func test() {
 	// Clear KVC
-	res, err := kvc.Clear(context.Background(), &pb.Empty{})
+	r := pb.Command{Operation: pb.Op_CLEAR, Arg: &pb.Command_Clear{Clear: &pb.Empty{}}}
+	res, err := kvc.Do(context.Background(), &r)
 	arg := res.GetRedirect()
 	if arg != nil {
 		log.Printf("Redirecting")
