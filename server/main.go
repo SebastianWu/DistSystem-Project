@@ -59,7 +59,7 @@ func main() {
 	s := grpc.NewServer()
 
 	// Initialize KVStore
-	store := KVStore{C: make(chan InputChannelType), store: make(map[string]string)}
+	store := KVStore{BC: make(chan BatchInputChannelType), store: make(map[string]string)}
 	go serve(&store, r, &peers, id, raftPort)
 
 	// Tell GRPC that s will be serving requests for the KvStore service and should use store (defined on line 23)

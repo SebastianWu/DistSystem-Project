@@ -174,10 +174,10 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 	role := FOLLOWER
 	num_votes_received := 0
 	currLeader := id
-	responseChan := make(map[int64]chan pb.Result) // only for leader to store the response channel for each operation
+	responseChan := make(map[int64]chan pb.ResultBatch) // only for leader to store the response channel for each operation
 
 	// initialize LOG with a empty entry with index 0
-	LOG = append(LOG, &pb.Entry{Term: 0, Index: 0, Cmd: nil})
+	LOG = append(LOG, &pb.Entry{Term: 0, Index: 0, CmdB: nil})
 
 	// Run forever handling inputs from various channels
 	for {
@@ -205,7 +205,7 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 			}
 			if commitIndex > lastApplied { // Response after entry applied to state machine if this server is LEADER
 				lastApplied += 1
-				s.HandleCommand(InputChannelType{command: *LOG[lastApplied].Cmd, response: responseChan[lastApplied]})
+				s.HandleBatchCommand(BatchInputChannelType{command_batch: *LOG[lastApplied].CmdB, response_batch: responseChan[lastApplied]})
 			}
 
 			// get lastLogIndex for the use of Append Response
@@ -227,7 +227,7 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 			restartTimer(timer, r)
 		} else if commitIndex > lastApplied { // Update state machine if this server is not leader
 			lastApplied += 1
-			s.UpdateStateMachine(*LOG[lastApplied].Cmd)
+			s.UpdateStateMachineWBC(*LOG[lastApplied].CmdB)
 		}
 		select {
 		case <-timer.C:
@@ -254,6 +254,7 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 			}
 			// This will also take care of any pesky timeouts that happened while processing the operation.
 			restartTimer(timer, r)
+		/*
 		case op := <-s.C:
 			// We received an operation from a client
 			// Figure out if you can actually handle the request here. If not use the Redirect result to send the
@@ -271,6 +272,28 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 				responseChan[lastLogIndex] = op.response
 			}
 			// Use Raft to make sure it is safe to actually run the command.
+		*/
+		case op_b := <-s.BC:	// after implement batching
+			// We received an operation from a client
+			// Figure out if you can actually handle the request here. If not use the Redirect result to send the
+			// client elsewhere.
+			if role != LEADER { // send pb.Redirect{currLeader} back to client
+				redirect_m := pb.Result{Result: &pb.Result_Redirect{Redirect: &pb.Redirect{Server: currLeader}}}
+				res_b := make([]*pb.Result,0)
+				res_b = append(res_b, &redirect_m)
+				op_b.response_batch <- pb.ResultBatch{ResB: res_b}
+			} else { // if role is LEADER
+				log.Printf("received operation batch: %v", len(op_b.command_batch.CmdB))
+				// append entry to local log
+				lastLogIndex := LOG[len(LOG)-1].Index
+
+				lastLogIndex += 1
+				//log.Printf(" new log index: %v", lastLogIndex)
+				LOG = append(LOG, &pb.Entry{Term: currentTerm, Index: lastLogIndex, CmdB: &op_b.command_batch})
+				responseChan[lastLogIndex] = op_b.response_batch
+			}
+			// Use Raft to make sure it is safe to actually run the command.
+
 		case ae := <-raft.AppendChan:
 			// We received an AppendEntries request from a Raft peer
 

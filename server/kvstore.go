@@ -14,9 +14,15 @@ type InputChannelType struct {
 	response chan pb.Result
 }
 
+type BatchInputChannelType struct {
+	command_batch pb.CommandBatch
+	response_batch chan pb.ResultBatch
+}
+
 // The struct for key value stores.
 type KVStore struct {
 	C     chan InputChannelType
+	BC    chan BatchInputChannelType
 	store map[string]string
 }
 
@@ -69,6 +75,23 @@ func (s *KVStore) CAS(ctx context.Context, in *pb.CASArg) (*pb.Result, error) {
 	log.Printf("Waiting for CAS response")
 	result := <-c
 	// The bit below works because Go maps return the 0 value for non existent keys, which is empty in this case.
+	return &result, nil
+}
+
+func (s *KVStore) Do(ctx context.Context, in *pb.Command) (*pb.Result, error) {
+	c := make(chan pb.Result)
+	r := *in
+	s.C <- InputChannelType{command: r, response: c}
+	log.Printf("Waiting for Do response")
+	result := <-c
+	return &result, nil
+}
+
+func (s *KVStore) Batching(ctx context.Context, in *pb.CommandBatch) (*pb.ResultBatch, error) {
+	c := make(chan pb.ResultBatch)
+	r := *in
+	s.BC <- BatchInputChannelType{command_batch: r, response_batch: c}
+	result := <-c
 	return &result, nil
 }
 
@@ -127,6 +150,32 @@ func (s *KVStore) HandleCommand(op InputChannelType) {
 	}
 }
 
+func (s *KVStore) HandleBatchCommand(op BatchInputChannelType) {
+	ResB := make([]*pb.Result,0)
+	for i := range op.command_batch.CmdB{
+		var result pb.Result
+		switch c:= op.command_batch.CmdB[i]; c.Operation {
+		case pb.Op_GET:
+			arg := c.GetGet()
+			result = s.GetInternal(arg.Key)
+		case pb.Op_SET:
+			arg := c.GetSet()
+			result = s.SetInternal(arg.Key, arg.Value)
+		case pb.Op_CLEAR:
+			result = s.ClearInternal()
+		case pb.Op_CAS:
+			arg := c.GetCas()
+			result = s.CasInternal(arg.Kv.Key, arg.Kv.Value, arg.Value.Value)
+		default:
+			// Sending a blank response to just free things up, but we don't know how to make progress here.
+			result = pb.Result{}
+			log.Fatalf("Unrecognized operation %v", c)
+		}
+		ResB = append(ResB, &result)
+	}
+	op.response_batch <- pb.ResultBatch{ResB: ResB}
+}
+
 // update state machine function if this server is follower
 func (s *KVStore) UpdateStateMachine(cmd pb.Command) {
 	switch cmd.Operation {
@@ -145,5 +194,11 @@ func (s *KVStore) UpdateStateMachine(cmd pb.Command) {
 	default:
 		// receive an unrecognized operation
 		log.Fatalf("Unrecognized operation %v", cmd)
+	}
+}
+
+func (s *KVStore) UpdateStateMachineWBC(cmd_b pb.CommandBatch) {
+	for i := range cmd_b.CmdB{
+		s.UpdateStateMachine(*cmd_b.CmdB[i])
 	}
 }
