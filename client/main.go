@@ -6,7 +6,7 @@ import (
 	"log"
 	"os"
 
-	//"time"
+	"time"
 
 	"bytes"
 	"os/exec"
@@ -25,6 +25,8 @@ var kvc pb.KvStoreClient
 var conn *grpc.ClientConn
 var CmdMap map[int]*pb.Command
 var CorrectResMap map[int]pb.KeyValue
+var BatchSize int
+var CommandNum int
 
 func usage() {
 	fmt.Printf("Usage %s <endpoint>\n", os.Args[0])
@@ -80,11 +82,21 @@ func main() {
 
 	// Create a KvStore client
 	kvc = pb.NewKvStoreClient(conn)
-	for i:=0; i<200; i++{
-		BatchTest()
-		fmt.Printf("\033[15DOn %d/1000", (i+1)*5)
+	BatchSize = 100
+	CommandNum = 1000
+	start := time.Now()
+	for i:=0; i<CommandNum; {
+		//start := time.Now()
+		i = BatchTest(i)
+		//t := time.Now()
+		//elapsed := t.Sub(start)
+		//fmt.Printf("Elapsed %v\n", elapsed)
+		fmt.Printf("\033[15DOn %d/%v", i, CommandNum)
 	}
-	log.Printf("\nFinished test")
+	t := time.Now()
+	elapsed := t.Sub(start)
+	fmt.Println()
+	log.Printf("Finished test with %v", elapsed)
 }
 func buildCommandMap() {
 	CmdMap = make(map[int]*pb.Command)
@@ -110,11 +122,18 @@ func buildCorrectResMap() {
 	CorrectResMap[4] = pb.KeyValue{Key: "hello", Value: "2"}
 	CorrectResMap[5] = pb.KeyValue{Key: "hellooo", Value: ""}
 }
-func BatchTest() {
+func BatchTest(counter int) (int){
 	Cmd_Batch := make([]*pb.Command,0)
-	for i:=0; i<6; i++{
-		Cmd_Batch = append(Cmd_Batch, CmdMap[i])
+	start_num := counter
+	for i:=0; i<BatchSize; i++{
+		if counter < CommandNum{
+			Cmd_Batch = append(Cmd_Batch, CmdMap[counter%6])
+			counter += 1
+		}else{
+			break
+		}
 	}
+	end_num := counter
 	r := pb.CommandBatch{CmdB: Cmd_Batch}
 	res, err := kvc.Batching(context.Background(), &r)
 	arg := res.ResB[0].GetRedirect()
@@ -134,12 +153,13 @@ func BatchTest() {
 		res, err = kvc.Batching(context.Background(), &r)
 		arg = res.ResB[0].GetRedirect()
 	}
-	for i:=1; i<6; i++{
+	for i:=start_num; i<end_num; i++{
 		//log.Printf("Key: %v, Value %v\n", res.ResB[i].GetKv().Key, res.ResB[i].GetKv().Value)
-		if res.ResB[i].GetKv().Key != CorrectResMap[i].Key || res.ResB[i].GetKv().Value != CorrectResMap[i].Value{
+		if i%6!=0 && (res.ResB[i-start_num].GetKv().Key != CorrectResMap[i%6].Key || res.ResB[i-start_num].GetKv().Value != CorrectResMap[i%6].Value){
 			log.Printf("Wrong Res!\n")
 		}
 	}
+	return counter
 }
 func test() {
 	// Clear KVC
