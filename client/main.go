@@ -11,7 +11,7 @@ import (
 	"bytes"
 	"os/exec"
 	"strings"
-	//"strconv"
+	"strconv"
 
 	context "golang.org/x/net/context"
 	"google.golang.org/grpc"
@@ -27,6 +27,7 @@ var CmdMap map[int]*pb.Command
 var CorrectResMap map[int]pb.KeyValue
 var BatchSize int
 var CommandNum int
+var AVG_Latency time.Duration
 
 func usage() {
 	fmt.Printf("Usage %s <endpoint>\n", os.Args[0])
@@ -42,8 +43,23 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
+	BatchSize = 10	// default batch size
+	CommandNum = 1000	// default test command num
 	endpoint = flag.Args()[0]
+	if flag.NArg() >1 {
+		bs,err := strconv.Atoi(flag.Args()[1])
+		if err==nil{
+			BatchSize = bs
+		}
+	}
+	if flag.NArg() == 3 {
+		cn,err := strconv.Atoi(flag.Args()[2])
+		if err == nil{
+			CommandNum = cn
+		}
+	}
 	log.Printf("Connecting to %v", endpoint)
+	log.Printf("Test %v commands with batch size %v", CommandNum, BatchSize)
 
 	cmd := exec.Command("../launch-tool/launch.py", "list")
 	var out bytes.Buffer
@@ -52,7 +68,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Printf("list of peers: %v\n", strings.Split(out.String(), "\n"))
+	//log.Printf("list of peers: %v\n", strings.Split(out.String(), "\n"))
 	serverMap = make(map[string]string)
 	peerList := strings.Split(out.String(), "\n")
 	for i := 0; i < len(peerList); i++ {
@@ -69,7 +85,7 @@ func main() {
 			serverMap[peerList[i]] = strings.Trim(out.String(), "\n")
 		}
 	}
-	fmt.Println(serverMap)
+	//fmt.Println(serverMap)
 	// Connect to the server. We use WithInsecure since we do not configure https in this class.
 	conn, err = grpc.Dial(endpoint, grpc.WithInsecure())
 	//Ensure connection did not fail.
@@ -82,21 +98,16 @@ func main() {
 
 	// Create a KvStore client
 	kvc = pb.NewKvStoreClient(conn)
-	BatchSize = 100
-	CommandNum = 1000
 	start := time.Now()
 	for i:=0; i<CommandNum; {
-		//start := time.Now()
 		i = BatchTest(i)
-		//t := time.Now()
-		//elapsed := t.Sub(start)
-		//fmt.Printf("Elapsed %v\n", elapsed)
 		fmt.Printf("\033[15DOn %d/%v", i, CommandNum)
 	}
 	t := time.Now()
 	elapsed := t.Sub(start)
+	AVG_Latency = AVG_Latency/time.Duration(CommandNum)
 	fmt.Println()
-	log.Printf("Finished test with %v", elapsed)
+	log.Printf("Finished test with %v runtime, %v AVG latency", elapsed, AVG_Latency)
 }
 func buildCommandMap() {
 	CmdMap = make(map[int]*pb.Command)
@@ -134,7 +145,8 @@ func BatchTest(counter int) (int){
 		}
 	}
 	end_num := counter
-	r := pb.CommandBatch{CmdB: Cmd_Batch}
+	start := time.Now()	// start time of this batch
+	r := pb.CommandBatch{CmdB: Cmd_Batch}	// request of this batch
 	res, err := kvc.Batching(context.Background(), &r)
 	arg := res.ResB[0].GetRedirect()
 	if arg != nil{
@@ -153,7 +165,10 @@ func BatchTest(counter int) (int){
 		res, err = kvc.Batching(context.Background(), &r)
 		arg = res.ResB[0].GetRedirect()
 	}
-	for i:=start_num; i<end_num; i++{
+	t := time.Now()	// finish time of this batch
+	Latency := t.Sub(start)
+	AVG_Latency += Latency * time.Duration(len(Cmd_Batch))
+	for i:=start_num; i<end_num; i++{	// check res is correct or not
 		//log.Printf("Key: %v, Value %v\n", res.ResB[i].GetKv().Key, res.ResB[i].GetKv().Value)
 		if i%6!=0 && (res.ResB[i-start_num].GetKv().Key != CorrectResMap[i%6].Key || res.ResB[i-start_num].GetKv().Value != CorrectResMap[i%6].Value){
 			log.Printf("Wrong Res!\n")
