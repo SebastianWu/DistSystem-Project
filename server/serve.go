@@ -141,7 +141,8 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 	type AppendResponse struct {
 		ret          *pb.AppendEntriesRet
 		prevLogIndex int64
-		lastLogIndex int64 // the index of last log
+		//lastLogIndex int64 // the index of last log
+		lenEntries   int64
 		err          error
 		peer         string
 	}
@@ -221,8 +222,10 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 				}
 				go func(c pb.RaftClient, p string) {
 					ret, err := c.AppendEntries(context.Background(), &pb.AppendEntriesArgs{Term: currentTerm, LeaderID: id, PrevLogIndex: prevLogIndex, PrevLogTerm: prevLogTerm, LeaderCommit: commitIndex, Entries: entries})
-					appendResponseChan <- AppendResponse{ret: ret, prevLogIndex: 0, lastLogIndex: lastLogIndex, err: err, peer: p}
+					appendResponseChan <- AppendResponse{ret: ret, prevLogIndex: prevLogIndex, lenEntries: int64(len(entries)), err: err, peer: p}
 				}(c, p)
+				// implement pipeline
+				nextIndex[p] = lastLogIndex + 1
 			}
 			restartTimer(timer, r)
 		} else if commitIndex > lastApplied { // Update state machine if this server is not leader
@@ -322,7 +325,7 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 				if ae.arg.Entries != nil {
 					log.Printf("Received append entry from %v at term %v", ae.arg.LeaderID, ae.arg.Term)
 				} else {
-					log.Printf("Received heartbeats from %v at term %v", ae.arg.LeaderID, ae.arg.Term)
+					//log.Printf("Received heartbeats from %v at term %v", ae.arg.LeaderID, ae.arg.Term)
 				}
 				// If an existing entry conflicts with a new one (same index but different terms), delete the existing entry and all that follow it
 				start_to_delete_index := int64(len(LOG))
@@ -421,16 +424,17 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 					num_votes_received = 0
 				}
 				if role == LEADER && ar.ret.Term == currentTerm {
-					log.Printf("Got append response from %v at term %v %v", ar.peer, currentTerm, ar.lastLogIndex)
+					log.Printf("Got append response from %v at term %v %v", ar.peer, currentTerm, ar.prevLogIndex + ar.lenEntries)
 					// If successful: update nextIndex and matchIndex for follower
 					if ar.ret.Success == true {
-						matchIndex[ar.peer] = ar.lastLogIndex
-						nextIndex[ar.peer] = ar.lastLogIndex + 1
+						matchIndex[ar.peer] = ar.prevLogIndex + ar.lenEntries
+						nextIndex[ar.peer] = ar.prevLogIndex + ar.lenEntries + 1
 					} else {
 						// If AppendEntries fails because of log inconsistency: decrement nextIndex and retry
-						if nextIndex[ar.peer] > 1 {
-							nextIndex[ar.peer] -= 1
-						}
+						//if nextIndex[ar.peer] > 1 {
+						//	nextIndex[ar.peer] -= 1
+						//}
+						nextIndex[ar.peer] = ar.prevLogIndex
 					}
 				}
 			}
