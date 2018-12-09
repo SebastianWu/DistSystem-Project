@@ -15,7 +15,7 @@ type InputChannelType struct {
 }
 
 type BatchInputChannelType struct {
-	command_batch pb.CommandBatch
+	command_batch  pb.CommandBatch
 	response_batch chan pb.ResultBatch
 }
 
@@ -151,10 +151,10 @@ func (s *KVStore) HandleCommand(op InputChannelType) {
 }
 
 func (s *KVStore) HandleBatchCommand(op BatchInputChannelType) {
-	ResB := make([]*pb.Result,0)
-	for i := range op.command_batch.CmdB{
+	ResB := make([]*pb.Result, 0)
+	for i := range op.command_batch.CmdB {
 		var result pb.Result
-		switch c:= op.command_batch.CmdB[i]; c.Operation {
+		switch c := op.command_batch.CmdB[i]; c.Operation {
 		case pb.Op_GET:
 			arg := c.GetGet()
 			result = s.GetInternal(arg.Key)
@@ -198,7 +198,7 @@ func (s *KVStore) UpdateStateMachine(cmd pb.Command) {
 }
 
 func (s *KVStore) UpdateStateMachineWBC(cmd_b pb.CommandBatch) {
-	for i := range cmd_b.CmdB{
+	for i := range cmd_b.CmdB {
 		s.UpdateStateMachine(*cmd_b.CmdB[i])
 	}
 }

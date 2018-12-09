@@ -9,9 +9,10 @@ import (
 	"time"
 
 	"bytes"
+	"math/rand"
 	"os/exec"
-	"strings"
 	"strconv"
+	"strings"
 
 	context "golang.org/x/net/context"
 	"google.golang.org/grpc"
@@ -28,6 +29,9 @@ var CorrectResMap map[int]pb.KeyValue
 var BatchSize int
 var CommandNum int
 var AVG_Latency time.Duration
+var c chan *pb.Command
+var Finished bool
+var MaxInterval time.Duration
 
 func usage() {
 	fmt.Printf("Usage %s <endpoint>\n", os.Args[0])
@@ -43,18 +47,19 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
-	BatchSize = 10	// default batch size
-	CommandNum = 1000	// default test command num
+	BatchSize = 10                   // default batch size
+	CommandNum = 1000                // default test command num
+	MaxInterval = time.Duration(1000000) // default max interval in millisecond
 	endpoint = flag.Args()[0]
-	if flag.NArg() >1 {
-		bs,err := strconv.Atoi(flag.Args()[1])
-		if err==nil{
+	if flag.NArg() > 1 {
+		bs, err := strconv.Atoi(flag.Args()[1])
+		if err == nil {
 			BatchSize = bs
 		}
 	}
 	if flag.NArg() == 3 {
-		cn,err := strconv.Atoi(flag.Args()[2])
-		if err == nil{
+		cn, err := strconv.Atoi(flag.Args()[2])
+		if err == nil {
 			CommandNum = cn
 		}
 	}
@@ -95,17 +100,19 @@ func main() {
 
 	buildCommandMap()
 	buildCorrectResMap()
+	c = make(chan *pb.Command)
 
 	// Create a KvStore client
 	kvc = pb.NewKvStoreClient(conn)
 	start := time.Now()
-	for i:=0; i<CommandNum; {
+	for i := 0; i < CommandNum; {
 		i = BatchTest(i)
 		fmt.Printf("\033[15DOn %d/%v", i, CommandNum)
 	}
+	//BatchingRandomTest()
 	t := time.Now()
 	elapsed := t.Sub(start)
-	AVG_Latency = AVG_Latency/time.Duration(CommandNum)
+	AVG_Latency = AVG_Latency / time.Duration(CommandNum)
 	fmt.Println()
 	log.Printf("Finished test with %v runtime, %v AVG latency", elapsed, AVG_Latency)
 }
@@ -133,23 +140,23 @@ func buildCorrectResMap() {
 	CorrectResMap[4] = pb.KeyValue{Key: "hello", Value: "2"}
 	CorrectResMap[5] = pb.KeyValue{Key: "hellooo", Value: ""}
 }
-func BatchTest(counter int) (int){
-	Cmd_Batch := make([]*pb.Command,0)
+func BatchTest(counter int) int {
+	Cmd_Batch := make([]*pb.Command, 0)
 	start_num := counter
-	for i:=0; i<BatchSize; i++{
-		if counter < CommandNum{
+	for i := 0; i < BatchSize; i++ {
+		if counter < CommandNum {
 			Cmd_Batch = append(Cmd_Batch, CmdMap[counter%6])
 			counter += 1
-		}else{
+		} else {
 			break
 		}
 	}
 	end_num := counter
-	start := time.Now()	// start time of this batch
-	r := pb.CommandBatch{CmdB: Cmd_Batch}	// request of this batch
+	start := time.Now()                   // start time of this batch
+	r := pb.CommandBatch{CmdB: Cmd_Batch} // request of this batch
 	res, err := kvc.Batching(context.Background(), &r)
 	arg := res.ResB[0].GetRedirect()
-	if arg != nil{
+	if arg != nil {
 		log.Printf("Redirecting!")
 	}
 	for arg != nil {
@@ -165,17 +172,99 @@ func BatchTest(counter int) (int){
 		res, err = kvc.Batching(context.Background(), &r)
 		arg = res.ResB[0].GetRedirect()
 	}
-	t := time.Now()	// finish time of this batch
+	t := time.Now() // finish time of this batch
 	Latency := t.Sub(start)
 	AVG_Latency += Latency * time.Duration(len(Cmd_Batch))
-	for i:=start_num; i<end_num; i++{	// check res is correct or not
+	for i := start_num; i < end_num; i++ { // check res is correct or not
 		//log.Printf("Key: %v, Value %v\n", res.ResB[i].GetKv().Key, res.ResB[i].GetKv().Value)
-		if i%6!=0 && (res.ResB[i-start_num].GetKv().Key != CorrectResMap[i%6].Key || res.ResB[i-start_num].GetKv().Value != CorrectResMap[i%6].Value){
+		if i%6 != 0 && (res.ResB[i-start_num].GetKv().Key != CorrectResMap[i%6].Key || res.ResB[i-start_num].GetKv().Value != CorrectResMap[i%6].Value) {
 			log.Printf("Wrong Res!\n")
 		}
 	}
 	return counter
 }
+
+//TODO: decide random time interval between commands
+func getCommand() {
+	c <- CmdMap[0]
+	for i := 1; i < CommandNum; i++ {
+		t := time.Tick(time.Duration(rand.Intn(100)) * time.Millisecond)
+		<-t
+		// add one command to channel
+		c <- CmdMap[i%6]
+	}
+	Finished = true
+}
+
+func BatchingRandomTest() {
+	//c := make(chan pb.Command)
+	Finished = false
+	packed := false
+	interval := time.NewTimer(MaxInterval * time.Millisecond)
+	count := 0 // counter for cmd in one batch
+	Cmd_Batch := make([]*pb.Command, 0)
+	prevEnd := 0
+	go getCommand()
+	for !Finished {
+		select {
+		case <-interval.C:
+			// time duration between two command is larger than interval, so start a new batch
+			packed = true
+			fmt.Printf("Batch size: %v", len(Cmd_Batch))
+			// restart interval
+			interval = time.NewTimer(MaxInterval * time.Millisecond)
+
+		case cmd := <-c:
+			fmt.Println("got one Cmd")
+			// append cmd to Cmd Batch
+			Cmd_Batch = append(Cmd_Batch, cmd)
+			count += 1
+			// check if Cmd Batch achieve batch size, if so start a new batch
+			if count == BatchSize {
+				packed = true
+				fmt.Printf("Batch size: %v", len(Cmd_Batch))
+
+			}
+			// restart interval
+			interval = time.NewTimer(MaxInterval * time.Millisecond)
+		}
+		if packed{
+			count = 0
+			r := pb.CommandBatch{CmdB: Cmd_Batch}
+			res, err := kvc.Batching(context.Background(), &r)
+			arg := res.ResB[0].GetRedirect()
+			if arg != nil {
+				log.Printf("Redirecting!")
+			}
+			for arg != nil {
+				peerN := strings.Split(arg.Server, ":")[0]
+				endpoint = serverMap[peerN]
+				conn.Close()
+				conn, err = grpc.Dial(endpoint, grpc.WithInsecure())
+				if err != nil {
+					log.Fatalf("Failed to dial GRPC server %v", err)
+				}
+				//log.Printf("Connected")
+				kvc = pb.NewKvStoreClient(conn)
+				res, err = kvc.Batching(context.Background(), &r)
+				arg = res.ResB[0].GetRedirect()
+			}
+			start_num := prevEnd
+			end_num := start_num + len(Cmd_Batch)
+			for i := start_num; i < end_num; i++ { // check res is correct or not
+				//log.Printf("Key: %v, Value %v\n", res.ResB[i].GetKv().Key, res.ResB[i].GetKv().Value)
+				if i%6 != 0 && (res.ResB[i-start_num].GetKv().Key != CorrectResMap[i%6].Key || res.ResB[i-start_num].GetKv().Value != CorrectResMap[i%6].Value) {
+					log.Printf("Wrong Res!\n")
+				}
+			}
+			prevEnd = end_num
+			Cmd_Batch = make([]*pb.Command, 0)
+			fmt.Println("finish this batch")
+		}
+	}
+
+}
+
 func test() {
 	// Clear KVC
 	r := pb.Command{Operation: pb.Op_CLEAR, Arg: &pb.Command_Clear{Clear: &pb.Empty{}}}
