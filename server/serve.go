@@ -62,6 +62,13 @@ func randomDuration(r *rand.Rand) time.Duration {
 	return time.Duration(r.Intn(DurationMax-DurationMin)+DurationMin) * time.Millisecond
 }
 
+func heartbeatDuration(r *rand.Rand) time.Duration {
+	// Constant
+	const DurationMax = 100
+	const DurationMin = 50
+	return time.Duration(r.Intn(DurationMax-DurationMin)+DurationMin) * time.Millisecond
+}
+
 // Restart the supplied timer using a random timeout based on function above
 func restartTimer(timer *time.Timer, r *rand.Rand) {
 	stopped := timer.Stop()
@@ -75,6 +82,20 @@ func restartTimer(timer *time.Timer, r *rand.Rand) {
 
 	}
 	timer.Reset(randomDuration(r))
+}
+
+func restartLeaderTimer(timer *time.Timer, r *rand.Rand) {
+	stopped := timer.Stop()
+	// If stopped is false that means someone stopped before us, which could be due to the timer going off before this,
+	// in which case we just drain notifications.
+	if !stopped {
+		// Loop for any queued notifications
+		for len(timer.C) > 0 {
+			<-timer.C
+		}
+
+	}
+	timer.Reset(heartbeatDuration(r))
 }
 
 // Launch a GRPC service for this Raft peer.
@@ -121,7 +142,7 @@ func Min(x int64, y int64) int64 {
 
 // The main service loop. All modifications to the KV store are run through here.
 func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
-	r.Seed(200)
+	//r.Seed(200)
 	raft := Raft{AppendChan: make(chan AppendEntriesInput), VoteChan: make(chan VoteInput)}
 	// Start in a Go routine so it doesn't affect us.
 	go RunRaftServer(&raft, port)
@@ -157,6 +178,7 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 
 	// Create a timer and start running it
 	timer := time.NewTimer(randomDuration(r))
+	leadertimer := time.NewTimer(heartbeatDuration(r))
 
 	// Persistent state on all server
 	currentTerm := int64(0)
@@ -176,7 +198,6 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 	num_votes_received := 0
 	currLeader := id
 	responseChan := make(map[int64]chan pb.ResultBatch) // only for leader to store the response channel for each operation
-	needToSend := false
 
 	// initialize LOG with a empty entry with index 0
 	LOG = append(LOG, &pb.Entry{Term: 0, Index: 0, CmdB: nil})
@@ -207,12 +228,10 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 			}
 			if commitIndex > lastApplied { // Response after entry applied to state machine if this server is LEADER
 				lastApplied += 1
-				// implement parallelism 
+				// implement parallelism
 				go s.HandleBatchCommand(BatchInputChannelType{command_batch: *LOG[lastApplied].CmdB, response_batch: responseChan[lastApplied]})
 			}
-
-			if needToSend {
-				needToSend = false
+			/*
 				// get lastLogIndex for the use of Append Response
 				lastLogIndex := LOG[len(LOG)-1].Index
 
@@ -232,7 +251,8 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 					nextIndex[p] = lastLogIndex + 1
 				}
 				restartTimer(timer, r)
-			}
+			*/
+
 		} else if commitIndex > lastApplied { // Update state machine if this server is not leader
 			lastApplied += 1
 			// implement parallelism
@@ -263,6 +283,28 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 			}
 			// This will also take care of any pesky timeouts that happened while processing the operation.
 			restartTimer(timer, r)
+		case <-leadertimer.C:
+			if role == LEADER {
+				//lastLogIndex := LOG[len(LOG)-1].Index
+
+				for p, c := range peerClients {
+					prevLogIndex := LOG[nextIndex[p]-1].Index
+					prevLogTerm := LOG[nextIndex[p]-1].Term
+					// If last log index >= nextIndex for a follower: send Append Entries RPC with log entries starting at nextIndex
+					var entries []*pb.Entry = nil
+					if nextIndex[p] < int64(len(LOG)) {
+						entries = LOG[nextIndex[p]:]
+					}
+					go func(c pb.RaftClient, p string) {
+						ret, err := c.AppendEntries(context.Background(), &pb.AppendEntriesArgs{Term: currentTerm, LeaderID: id, PrevLogIndex: prevLogIndex, PrevLogTerm: prevLogTerm, LeaderCommit: commitIndex, Entries: entries})
+						appendResponseChan <- AppendResponse{ret: ret, prevLogIndex: prevLogIndex, lenEntries: int64(len(entries)), err: err, peer: p}
+					}(c, p)
+					// implement pipeline
+					//nextIndex[p] = lastLogIndex + 1
+				}
+				restartTimer(timer, r)
+				restartLeaderTimer(leadertimer, r)
+			}
 		/*
 			case op := <-s.C:
 				// We received an operation from a client
@@ -300,7 +342,7 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 				//log.Printf(" new log index: %v", lastLogIndex)
 				LOG = append(LOG, &pb.Entry{Term: currentTerm, Index: lastLogIndex, CmdB: &op_b.command_batch})
 				responseChan[lastLogIndex] = op_b.response_batch
-				needToSend = true
+
 			}
 			// Use Raft to make sure it is safe to actually run the command.
 
@@ -416,7 +458,17 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 						nextIndex[peer] = lastLogIndex + 1
 						matchIndex[peer] = 0
 					}
-					needToSend = true
+
+					for p, c := range peerClients {
+						prevLogIndex := LOG[nextIndex[p]-1].Index
+						prevLogTerm := LOG[nextIndex[p]-1].Term
+
+						go func(c pb.RaftClient, p string) {
+							ret, err := c.AppendEntries(context.Background(), &pb.AppendEntriesArgs{Term: currentTerm, LeaderID: id, PrevLogIndex: prevLogIndex, PrevLogTerm: prevLogTerm, LeaderCommit: commitIndex, Entries: nil})
+							appendResponseChan <- AppendResponse{ret: ret, prevLogIndex: prevLogIndex, lenEntries: int64(0), err: err, peer: p}
+						}(c, p)
+					}
+					restartLeaderTimer(leadertimer, r)
 				}
 			}
 		case ar := <-appendResponseChan:
@@ -445,7 +497,7 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 						nextIndex[ar.peer] = ar.prevLogIndex
 					}
 				}
-				needToSend = true
+
 			}
 		}
 	}
