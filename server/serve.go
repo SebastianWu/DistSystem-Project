@@ -142,7 +142,7 @@ func Min(x int64, y int64) int64 {
 
 // The main service loop. All modifications to the KV store are run through here.
 func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
-	//r.Seed(200)
+	r.Seed(200)
 	raft := Raft{AppendChan: make(chan AppendEntriesInput), VoteChan: make(chan VoteInput)}
 	// Start in a Go routine so it doesn't affect us.
 	go RunRaftServer(&raft, port)
@@ -231,33 +231,12 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 				// implement parallelism
 				go s.HandleBatchCommand(BatchInputChannelType{command_batch: *LOG[lastApplied].CmdB, response_batch: responseChan[lastApplied]})
 			}
-			/*
-				// get lastLogIndex for the use of Append Response
-				lastLogIndex := LOG[len(LOG)-1].Index
-
-				for p, c := range peerClients {
-					prevLogIndex := LOG[nextIndex[p]-1].Index
-					prevLogTerm := LOG[nextIndex[p]-1].Term
-					// If last log index >= nextIndex for a follower: send Append Entries RPC with log entries starting at nextIndex
-					var entries []*pb.Entry = nil
-					if nextIndex[p] < int64(len(LOG)) {
-						entries = LOG[nextIndex[p]:]
-					}
-					go func(c pb.RaftClient, p string) {
-						ret, err := c.AppendEntries(context.Background(), &pb.AppendEntriesArgs{Term: currentTerm, LeaderID: id, PrevLogIndex: prevLogIndex, PrevLogTerm: prevLogTerm, LeaderCommit: commitIndex, Entries: entries})
-						appendResponseChan <- AppendResponse{ret: ret, prevLogIndex: prevLogIndex, lenEntries: int64(len(entries)), err: err, peer: p}
-					}(c, p)
-					// implement pipeline
-					nextIndex[p] = lastLogIndex + 1
-				}
-				restartTimer(timer, r)
-			*/
-
 		} else if commitIndex > lastApplied { // Update state machine if this server is not leader
 			lastApplied += 1
 			// implement parallelism
 			go s.UpdateStateMachineWBC(*LOG[lastApplied].CmdB)
 		}
+
 		select {
 		case <-timer.C:
 			// The timer went off.
@@ -285,8 +264,7 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 			restartTimer(timer, r)
 		case <-leadertimer.C:
 			if role == LEADER {
-				//lastLogIndex := LOG[len(LOG)-1].Index
-
+				lastLogIndex := LOG[len(LOG)-1].Index
 				for p, c := range peerClients {
 					prevLogIndex := LOG[nextIndex[p]-1].Index
 					prevLogTerm := LOG[nextIndex[p]-1].Term
@@ -300,7 +278,7 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 						appendResponseChan <- AppendResponse{ret: ret, prevLogIndex: prevLogIndex, lenEntries: int64(len(entries)), err: err, peer: p}
 					}(c, p)
 					// implement pipeline
-					//nextIndex[p] = lastLogIndex + 1
+					nextIndex[p] = lastLogIndex + 1
 				}
 				restartTimer(timer, r)
 				restartLeaderTimer(leadertimer, r)
