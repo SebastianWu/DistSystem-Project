@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"bytes"
-	"math/rand"
+	//"math/rand"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -64,7 +64,6 @@ func main() {
 		}
 	}
 	log.Printf("Connecting to %v", endpoint)
-	log.Printf("Test %v commands with batch size %v", CommandNum, BatchSize)
 
 	cmd := exec.Command("../launch-tool/launch.py", "list")
 	var out bytes.Buffer
@@ -73,7 +72,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	//log.Printf("list of peers: %v\n", strings.Split(out.String(), "\n"))
+	log.Printf("list of peers: %v\n", strings.Split(out.String(), "\n"))
 	serverMap = make(map[string]string)
 	peerList := strings.Split(out.String(), "\n")
 	for i := 0; i < len(peerList); i++ {
@@ -90,26 +89,26 @@ func main() {
 			serverMap[peerList[i]] = strings.Trim(out.String(), "\n")
 		}
 	}
-	//fmt.Println(serverMap)
+	fmt.Println(serverMap)
 	// Connect to the server. We use WithInsecure since we do not configure https in this class.
 	conn, err = grpc.Dial(endpoint, grpc.WithInsecure())
 	//Ensure connection did not fail.
 	if err != nil {
 		log.Fatalf("Failed to dial GRPC server %v", err)
 	}
-
+	log.Printf("Connected!")
 	buildCommandMap()
 	buildCorrectResMap()
 	c = make(chan *pb.Command)
 
 	// Create a KvStore client
 	kvc = pb.NewKvStoreClient(conn)
+	log.Printf("Test %v commands with batch size %v", CommandNum, BatchSize)
 	start := time.Now()
 	for i := 0; i < CommandNum; {
 		i = BatchTest(i)
 		fmt.Printf("\033[15DOn %d/%v", i, CommandNum)
 	}
-	//BatchingRandomTest()
 	t := time.Now()
 	elapsed := t.Sub(start)
 	AVG_Latency = AVG_Latency / time.Duration(CommandNum)
@@ -182,87 +181,6 @@ func BatchTest(counter int) int {
 		}
 	}
 	return counter
-}
-
-//TODO: decide random time interval between commands
-func getCommand() {
-	c <- CmdMap[0]
-	for i := 1; i < CommandNum; i++ {
-		t := time.Tick(time.Duration(rand.Intn(100)) * time.Millisecond)
-		<-t
-		// add one command to channel
-		c <- CmdMap[i%6]
-	}
-	Finished = true
-}
-
-func BatchingRandomTest() {
-	//c := make(chan pb.Command)
-	Finished = false
-	packed := false
-	interval := time.NewTimer(MaxInterval * time.Millisecond)
-	count := 0 // counter for cmd in one batch
-	Cmd_Batch := make([]*pb.Command, 0)
-	prevEnd := 0
-	go getCommand()
-	for !Finished {
-		select {
-		case <-interval.C:
-			// time duration between two command is larger than interval, so start a new batch
-			packed = true
-			fmt.Printf("Batch size: %v", len(Cmd_Batch))
-			// restart interval
-			interval = time.NewTimer(MaxInterval * time.Millisecond)
-
-		case cmd := <-c:
-			fmt.Println("got one Cmd")
-			// append cmd to Cmd Batch
-			Cmd_Batch = append(Cmd_Batch, cmd)
-			count += 1
-			// check if Cmd Batch achieve batch size, if so start a new batch
-			if count == BatchSize {
-				packed = true
-				fmt.Printf("Batch size: %v", len(Cmd_Batch))
-
-			}
-			// restart interval
-			interval = time.NewTimer(MaxInterval * time.Millisecond)
-		}
-		if packed{
-			count = 0
-			r := pb.CommandBatch{CmdB: Cmd_Batch}
-			res, err := kvc.Batching(context.Background(), &r)
-			arg := res.ResB[0].GetRedirect()
-			if arg != nil {
-				log.Printf("Redirecting!")
-			}
-			for arg != nil {
-				peerN := strings.Split(arg.Server, ":")[0]
-				endpoint = serverMap[peerN]
-				conn.Close()
-				conn, err = grpc.Dial(endpoint, grpc.WithInsecure())
-				if err != nil {
-					log.Fatalf("Failed to dial GRPC server %v", err)
-				}
-				//log.Printf("Connected")
-				kvc = pb.NewKvStoreClient(conn)
-				res, err = kvc.Batching(context.Background(), &r)
-				arg = res.ResB[0].GetRedirect()
-			}
-			start_num := prevEnd
-			end_num := start_num + len(Cmd_Batch)
-			for i := start_num; i < end_num; i++ { // check res is correct or not
-				//log.Printf("Key: %v, Value %v\n", res.ResB[i].GetKv().Key, res.ResB[i].GetKv().Value)
-				if i%6 != 0 && (res.ResB[i-start_num].GetKv().Key != CorrectResMap[i%6].Key || res.ResB[i-start_num].GetKv().Value != CorrectResMap[i%6].Value) {
-					log.Printf("Wrong Res!\n")
-				}
-			}
-			prevEnd = end_num
-			Cmd_Batch = make([]*pb.Command, 0)
-			fmt.Println("finish this batch")
-		}
-	}
-
 }
 
 func test() {
