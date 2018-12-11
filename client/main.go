@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"bytes"
-	//"math/rand"
+	"math/rand"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -30,8 +30,12 @@ var BatchSize int
 var CommandNum int
 var AVG_Latency time.Duration
 var c chan *pb.Command
-var Finished bool
-var MaxInterval time.Duration
+var p chan []*pb.Command
+var finish_get bool
+var finish_pack bool
+var send_time map[int]time.Time
+var res_time map[int]time.Time
+var randomIntervalTest bool
 
 func usage() {
 	fmt.Printf("Usage %s <endpoint>\n", os.Args[0])
@@ -47,9 +51,9 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
-	BatchSize = 10                   // default batch size
-	CommandNum = 1000                // default test command num
-	MaxInterval = time.Duration(1000000) // default max interval in millisecond
+	BatchSize = 10                       // default batch size
+	CommandNum = 1000                    // default test command num
+	randomIntervalTest = false
 	endpoint = flag.Args()[0]
 	if flag.NArg() > 1 {
 		bs, err := strconv.Atoi(flag.Args()[1])
@@ -57,11 +61,23 @@ func main() {
 			BatchSize = bs
 		}
 	}
-	if flag.NArg() == 3 {
+	if flag.NArg() > 2 {
 		cn, err := strconv.Atoi(flag.Args()[2])
 		if err == nil {
 			CommandNum = cn
 		}
+	}
+	if flag.NArg() == 4 {
+		if strings.Compare(flag.Args()[3], "r") == 0 {
+			randomIntervalTest = true
+		}else{
+			log.Printf("do random interval test, please add \"r\" as 4th argument.")
+			os.Exit(1)
+		}
+	}
+	if flag.NArg() > 4 {
+		log.Printf("too many arguments, maximum 4 arguments")
+		os.Exit(1)
 	}
 	log.Printf("Connecting to %v", endpoint)
 
@@ -104,16 +120,11 @@ func main() {
 	// Create a KvStore client
 	kvc = pb.NewKvStoreClient(conn)
 	log.Printf("Test %v commands with batch size %v", CommandNum, BatchSize)
-	start := time.Now()
-	for i := 0; i < CommandNum; {
-		i = BatchTest(i)
-		fmt.Printf("\033[15DOn %d/%v", i, CommandNum)
+	if randomIntervalTest {
+		randIntervalTest()
+	}else{
+		continuousBatchTest()
 	}
-	t := time.Now()
-	elapsed := t.Sub(start)
-	AVG_Latency = AVG_Latency / time.Duration(CommandNum)
-	fmt.Println()
-	log.Printf("Finished test with %v runtime, %v AVG latency", elapsed, AVG_Latency)
 }
 func buildCommandMap() {
 	CmdMap = make(map[int]*pb.Command)
@@ -138,6 +149,18 @@ func buildCorrectResMap() {
 	CorrectResMap[3] = pb.KeyValue{Key: "hello", Value: "2"}
 	CorrectResMap[4] = pb.KeyValue{Key: "hello", Value: "2"}
 	CorrectResMap[5] = pb.KeyValue{Key: "hellooo", Value: ""}
+}
+func continuousBatchTest(){
+	start := time.Now()
+	for i := 0; i < CommandNum; {
+		i = BatchTest(i)
+		fmt.Printf("\033[15DOn %d/%v", i, CommandNum)
+	}
+	t := time.Now()
+	elapsed := t.Sub(start)
+	AVG_Latency = AVG_Latency / time.Duration(CommandNum)
+	fmt.Println()
+	log.Printf("Finished test with %v runtime, %v AVG latency", elapsed, AVG_Latency)
 }
 func BatchTest(counter int) int {
 	Cmd_Batch := make([]*pb.Command, 0)
@@ -181,6 +204,102 @@ func BatchTest(counter int) int {
 		}
 	}
 	return counter
+}
+
+func get() {
+	c <- CmdMap[0]
+	send_time[0] = time.Now()
+	for i := 1; i < CommandNum; i++ {
+		t := time.Tick(time.Duration(1000+rand.Intn(1000)) * time.Microsecond)
+		<-t
+		send_time[i] = time.Now()
+		c <- CmdMap[i%6]
+	}
+}
+
+func pack() {
+	pack := make([]*pb.Command, 0)
+	interval := time.NewTimer(time.Duration(180) * time.Millisecond)
+	count := 0
+	total_count := 0
+	go get()
+	for total_count < CommandNum{
+		select {
+		case <-interval.C:
+			// run out interval, start to pack a batch
+			if len(pack) > 0 {
+				p <- pack
+				pack = make([]*pb.Command, 0)
+				count = 0
+			}
+			interval = time.NewTimer(time.Duration(180) * time.Millisecond)
+		case Cmd := <-c:
+			pack = append(pack, Cmd)
+			count += 1
+			total_count += 1
+			if count == BatchSize || total_count == CommandNum{
+				// pack a batch
+				p <- pack
+				pack = make([]*pb.Command, 0)
+				count = 0
+			}
+			interval = time.NewTimer(time.Duration(180) * time.Millisecond)
+		}
+	}
+}
+
+func randIntervalTest() {
+	log.Printf("Generate random time interval between each request command")
+	send_time = make(map[int]time.Time)
+	res_time = make(map[int]time.Time)
+	finish_get = false
+	finish_pack = false
+	c = make(chan *pb.Command)
+	p = make(chan []*pb.Command)
+	start_num := 0
+	end_num := 0
+	go pack()
+	for end_num < CommandNum{
+		select {
+		case pack := <-p:
+			end_num = start_num + len(pack)
+			r := pb.CommandBatch{CmdB: pack} // request of this batch
+			res, err := kvc.Batching(context.Background(), &r)
+			arg := res.ResB[0].GetRedirect()
+			if arg != nil {
+				log.Printf("Redirecting!")
+			}
+			for arg != nil {
+				peerN := strings.Split(arg.Server, ":")[0]
+				endpoint = serverMap[peerN]
+				conn.Close()
+				conn, err = grpc.Dial(endpoint, grpc.WithInsecure())
+				if err != nil {
+					log.Fatalf("Failed to dial GRPC server %v", err)
+				}
+				//log.Printf("Connected")
+				kvc = pb.NewKvStoreClient(conn)
+				res, err = kvc.Batching(context.Background(), &r)
+				arg = res.ResB[0].GetRedirect()
+			}
+			response_time := time.Now()
+			for i := start_num; i < end_num; i++ { // check res is correct or not
+				res_time[i] = response_time
+				//log.Printf("Key: %v, Value %v\n", res.ResB[i].GetKv().Key, res.ResB[i].GetKv().Value)
+				if i%6 != 0 && (res.ResB[i-start_num].GetKv().Key != CorrectResMap[i%6].Key || res.ResB[i-start_num].GetKv().Value != CorrectResMap[i%6].Value) {
+					log.Printf("Wrong Res!\n")
+				}
+			}
+			fmt.Printf("\033[15DOn %d/%v", end_num, CommandNum)
+			start_num = end_num
+		}
+	}
+	Latency := time.Duration(0)
+	for i:=0; i<CommandNum; i++{
+		Latency += res_time[i].Sub(send_time[i])
+	}
+	Latency = Latency / time.Duration(CommandNum)
+	log.Printf("Finished test with %v AVG latency", Latency)
 }
 
 func test() {
