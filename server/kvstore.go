@@ -91,6 +91,7 @@ func (s *KVStore) Batching(ctx context.Context, in *pb.CommandBatch) (*pb.Result
 	c := make(chan pb.ResultBatch)
 	r := *in
 	s.BC <- BatchInputChannelType{command_batch: r, response_batch: c}
+	log.Printf("Waiting for batching response")
 	result := <-c
 	return &result, nil
 }

@@ -308,6 +308,7 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 			// client elsewhere.
 			if role != LEADER { // send pb.Redirect{currLeader} back to client
 				redirect_m := pb.Result{Result: &pb.Result_Redirect{Redirect: &pb.Redirect{Server: currLeader}}}
+				log.Printf("Redirect to %v", redirect_m)
 				res_b := make([]*pb.Result, 0)
 				res_b = append(res_b, &redirect_m)
 				op_b.response_batch <- pb.ResultBatch{ResB: res_b}
