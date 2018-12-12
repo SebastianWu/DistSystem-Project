@@ -192,6 +192,7 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 	// Volatile state on leaders	// Reinitialized after election
 	nextIndex := make(map[string]int64)
 	matchIndex := make(map[string]int64)
+	leader_matchIndex := int64(0)
 
 	// my own variable
 	role := FOLLOWER
@@ -213,7 +214,10 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 			// If there exists an N such that N > commitIndex, a majority of matchIndex[i]>=N, and log[N].Term == currentTerm: set commitIndex = N
 			for i := commitIndex + 1; i < int64(len(LOG)); i++ {
 				if LOG[i].Term == currentTerm {
-					count := 1
+					count := 0
+					if leader_matchIndex >= i {
+						count += 1
+					}
 					for p := range peerClients {
 						if matchIndex[p] >= i {
 							count += 1
@@ -320,6 +324,12 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 				lastLogIndex += 1
 				//log.Printf(" new log index: %v", lastLogIndex)
 				LOG = append(LOG, &pb.Entry{Term: currentTerm, Index: lastLogIndex, CmdB: &op_b.command_batch})
+				// write log to non-volatile storage 
+				go func(){
+					// to improve efficiency, write to disk concurrenctly
+					// after finished writing to disk
+					leader_matchIndex = LOG[len(LOG)-1].Index
+				}()
 				responseChan[lastLogIndex] = op_b.response_batch
 
 			}
@@ -437,6 +447,7 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 						nextIndex[peer] = lastLogIndex + 1
 						matchIndex[peer] = 0
 					}
+					leader_matchIndex = lastLogIndex
 
 					for p, c := range peerClients {
 						prevLogIndex := LOG[nextIndex[p]-1].Index
@@ -463,7 +474,7 @@ func serve(s *KVStore, r *rand.Rand, peers *arrayPeers, id string, port int) {
 					num_votes_received = 0
 				}
 				if role == LEADER && ar.ret.Term == currentTerm {
-					log.Printf("Got append response from %v at term %v %v", ar.peer, currentTerm, ar.prevLogIndex+ar.lenEntries)
+					//log.Printf("Got append response from %v at term %v %v", ar.peer, currentTerm, ar.prevLogIndex+ar.lenEntries)
 					// If successful: update nextIndex and matchIndex for follower
 					if ar.ret.Success == true {
 						matchIndex[ar.peer] = ar.prevLogIndex + ar.lenEntries
