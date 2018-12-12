@@ -36,6 +36,7 @@ var finish_pack bool
 var send_time map[int]time.Time
 var res_time map[int]time.Time
 var randomIntervalTest bool
+var intervalT time.Duration
 
 func usage() {
 	fmt.Printf("Usage %s <endpoint>\n", os.Args[0])
@@ -51,9 +52,10 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
-	BatchSize = 10                       // default batch size
-	CommandNum = 1000                    // default test command num
-	randomIntervalTest = false
+	BatchSize = 10                                      // default batch size
+	CommandNum = 1000                                   // default test command num
+	randomIntervalTest = false                          // default not add random intervals
+	intervalT = time.Duration(20000) * time.Microsecond // default interval timer
 	endpoint = flag.Args()[0]
 	if flag.NArg() > 1 {
 		bs, err := strconv.Atoi(flag.Args()[1])
@@ -67,16 +69,22 @@ func main() {
 			CommandNum = cn
 		}
 	}
-	if flag.NArg() == 4 {
+	if flag.NArg() > 3 {
 		if strings.Compare(flag.Args()[3], "r") == 0 {
 			randomIntervalTest = true
-		}else{
+		} else {
 			log.Printf("do random interval test, please add \"r\" as 4th argument.")
 			os.Exit(1)
 		}
 	}
-	if flag.NArg() > 4 {
-		log.Printf("too many arguments, maximum 4 arguments")
+	if flag.NArg() == 5 {
+		interv, err := strconv.Atoi(flag.Args()[4])
+		if err == nil {
+			intervalT = time.Duration(interv) * time.Microsecond
+		}
+	}
+	if flag.NArg() > 5 {
+		log.Printf("too many arguments, maximum 5 arguments")
 		os.Exit(1)
 	}
 	log.Printf("Connecting to %v", endpoint)
@@ -122,7 +130,7 @@ func main() {
 	log.Printf("Test %v commands with batch size %v", CommandNum, BatchSize)
 	if randomIntervalTest {
 		randIntervalTest()
-	}else{
+	} else {
 		continuousBatchTest()
 	}
 }
@@ -150,11 +158,11 @@ func buildCorrectResMap() {
 	CorrectResMap[4] = pb.KeyValue{Key: "hello", Value: "2"}
 	CorrectResMap[5] = pb.KeyValue{Key: "hellooo", Value: ""}
 }
-func continuousBatchTest(){
+func continuousBatchTest() {
 	start := time.Now()
 	for i := 0; i < CommandNum; {
 		i = BatchTest(i)
-		fmt.Printf("\033[15DOn %d/%v", i, CommandNum)
+		fmt.Printf("\033[20DOn %d/%v", i, CommandNum)
 	}
 	t := time.Now()
 	elapsed := t.Sub(start)
@@ -210,7 +218,7 @@ func get() {
 	c <- CmdMap[0]
 	send_time[0] = time.Now()
 	for i := 1; i < CommandNum; i++ {
-		t := time.Tick(time.Duration(1000+rand.Intn(1000)) * time.Microsecond)
+		t := time.Tick(time.Duration(1+rand.Intn(1)) * time.Millisecond)
 		<-t
 		send_time[i] = time.Now()
 		c <- CmdMap[i%6]
@@ -219,11 +227,11 @@ func get() {
 
 func pack() {
 	pack := make([]*pb.Command, 0)
-	interval := time.NewTimer(time.Duration(180) * time.Millisecond)
+	interval := time.NewTimer(intervalT)
 	count := 0
 	total_count := 0
 	go get()
-	for total_count < CommandNum{
+	for total_count < CommandNum {
 		select {
 		case <-interval.C:
 			// run out interval, start to pack a batch
@@ -232,18 +240,18 @@ func pack() {
 				pack = make([]*pb.Command, 0)
 				count = 0
 			}
-			interval = time.NewTimer(time.Duration(180) * time.Millisecond)
+			interval = time.NewTimer(intervalT)
 		case Cmd := <-c:
 			pack = append(pack, Cmd)
 			count += 1
 			total_count += 1
-			if count == BatchSize || total_count == CommandNum{
+			if count == BatchSize || total_count == CommandNum {
 				// pack a batch
 				p <- pack
 				pack = make([]*pb.Command, 0)
 				count = 0
 			}
-			interval = time.NewTimer(time.Duration(180) * time.Millisecond)
+			interval = time.NewTimer(intervalT)
 		}
 	}
 }
@@ -259,7 +267,7 @@ func randIntervalTest() {
 	start_num := 0
 	end_num := 0
 	go pack()
-	for end_num < CommandNum{
+	for end_num < CommandNum {
 		select {
 		case pack := <-p:
 			end_num = start_num + len(pack)
@@ -295,7 +303,7 @@ func randIntervalTest() {
 		}
 	}
 	Latency := time.Duration(0)
-	for i:=0; i<CommandNum; i++{
+	for i := 0; i < CommandNum; i++ {
 		Latency += res_time[i].Sub(send_time[i])
 	}
 	Latency = Latency / time.Duration(CommandNum)
